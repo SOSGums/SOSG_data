@@ -1,3 +1,6 @@
+library(tidyverse)
+library(readxl)
+
 # Calculate basal area for permanent plots ----
 basal.area.fn <- function(x){ (pi*(x)^2)/40000 } # calculate basal area in m^2
 
@@ -43,13 +46,56 @@ tree.data.canopy = read.csv("clean_data/Tree data.csv") |>
 
 # Prep 2024 data ----
 ## Calculate 2024 basal area per stem ----
-tree.data.2024.basalArea = read.csv("raw_data/SOSG tree data 2024.csv") |>
-  mutate(plot = case_when(
-    burnHistory == "unburned" & health == "moderate" & plotNr == 1 ~ 21,
-    burnHistory == "unburned" & health == "moderate" & plotNr == 2 ~ 22,
-    burnHistory == "unburned" & health == "excellent" & plotNr == 1 ~ 7.2,
-    TRUE ~ NA
+
+tree.data.2024 = read_excel("raw_data/SOSG tree data 2024.xlsx", sheet = "data") |>
+  # Fix plotNr
+  mutate(plotNr = round(as.numeric(plotNr))) |>
+  # Filter out the burned plot
+  mutate(plotNickname = str_trim(plotNickname),
+    plot = case_when(
+      plotNickname == "Burning Log" ~ 23,
+      burnHistory == "unburned" & health == "moderate" & plotNr == 1 ~ 21,
+      burnHistory == "unburned" & health == "moderate" & plotNr == 2 ~ 22,
+      burnHistory == "unburned" & health == "excellent" & plotNr == 1 ~ 7.2,
+      burnHistory == "burned" & plotNr == 1 ~ 32,
+      plotNickname == "Aqueduct" ~ 26,
+      plotNickname == "Charlotte Pass" ~ 29,
+      plotNickname == "2K" ~ 27,
+      plotNickname == "Swing Bridge" ~ 24,
+      plotNickname == "Snowies Alpine" ~ 28,
+      plotNickname == "Geebung" ~ 30,
+      plotNickname == "Perisher" ~ 31,
+      plotNickname == "Blue Cow Lift" ~ 25,
+      plotNr == 481 ~ 481,
+      plotNr == 484 ~ 484,
+      plotNickname == "SE-Satellite East" ~ 387,
+      plotNickname == "SW-Satellite West" ~ 403,
+      plotNickname == "SS-Satellite South" ~ 419,
+      TRUE ~ NA
+    )) |>
+  # Resolve funny formatting of dendroNr
+  mutate(dendroNr = case_when(
+    dendroNr == "15?" ~ "15",
+    TRUE ~ dendroNr),
+    dendroNr = round(as.numeric(dendroNr), 1)) |>
+    # Correct dendro numbers
+  mutate(dendroNr = case_when(
+      burnHistory == "unburned" & health == "excellent" & plotNr == 1 & treeNr > 10 &
+        dendroNr %in% c(20, 26, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42) ~ dendroNr + 100,
+    TRUE ~ dendroNr
+    )) |>
+  # Filter out erroneous data entry
+  mutate(flag = case_when(
+    dendroNr == 90 & treeNr == 34 ~ "data entry error",
+    plot == 22 & treeNr == 51 ~ "wrong plot"
+    TRUE ~ "okay"
   )) |>
+  filter(flag == "okay")
+
+table(tree.data.2024$plot)
+table(tree.data.2024$plotNickname)
+
+tree.data.2024.basalArea = tree.data.2024 |>
   drop_na(plot) |>
   mutate(stemID = paste0(plot, ".", treeNr, ".", stemNr)) |>
   select(stemID, dbh) |>
@@ -58,8 +104,9 @@ tree.data.2024.basalArea = read.csv("raw_data/SOSG tree data 2024.csv") |>
   filter(!is.na(basal.area))
 
 ## Prepare 2024 stem data ----
-tree.data.2024.canopy = read.csv("raw_data/SOSG tree data 2024.csv") |>
-  select(burnHistory:plotNr, treeNr:hollows, canopy, frass:galleries) |>
+tree.data.2024.canopy = tree.data.2024 |>
+  drop_na(plot) |>
+  select(plotNickname, burnHistory:plotNr, plot, treeNr:hollows, canopy, frass:galleries, GPS, dendroNr, dendroType) |>
   rename(tree = treeNr, stem = stemNr, live = aliveStatus,
          bark = barkStatus, number = hollows) |>
   # Assign numerical value to canopy
@@ -69,12 +116,6 @@ tree.data.2024.canopy = read.csv("raw_data/SOSG tree data 2024.csv") |>
     canopy == "fair" ~ 3,
     canopy == "poor" ~ 2,
     canopy == "none" ~ 1
-  ),
-  plot = case_when(
-    burnHistory == "unburned" & health == "moderate" & plotNr == 1 ~ 21,
-    burnHistory == "unburned" & health == "moderate" & plotNr == 2 ~ 22,
-    burnHistory == "unburned" & health == "excellent" & plotNr == 1 ~ 7.2,
-    TRUE ~ NA
   )) |>
   # Beetles
   # Turn binary
@@ -92,13 +133,7 @@ tree.data.2024.canopy = read.csv("raw_data/SOSG tree data 2024.csv") |>
   ),
   beetlesum = case_when(
     frass == 0 & puckering == 0 & galleries == 0 ~ 0,
-    TRUE ~ 1),
-  plot = case_when(
-    burnHistory == "unburned" & health == "moderate" & plotNr == 1 ~ 21,
-    burnHistory == "unburned" & health == "moderate" & plotNr == 2 ~ 22,
-    burnHistory == "unburned" & health == "excellent" & plotNr == 1 ~ 7.2,
-    TRUE ~ NA
-  )) |>
+    TRUE ~ 1)) |>
   select(-plotNr) |>
   # Add basal area
   mutate(stemID = paste0(plot, ".", tree, ".", stem)) |>
@@ -110,7 +145,10 @@ tree.data.all.canopy = tree.data.canopy |>
   mutate(live = as.character(live),
          bark = as.character(bark),
          burnt = as.character(burnt)) |>
-  bind_rows(tree.data.2024.canopy)
+  bind_rows(tree.data.2024.canopy) |>
+  distinct()
+
+# write.csv(tree.data.all.canopy, "outputs/2024.03.27_Permanent plot trees for Weerach.csv")
 
 # Figure out basal area for all plots ----
 
@@ -149,7 +187,7 @@ canopy.data.classes = tree.data.all |>
   # Filter out the old plot 7
   filter(plot != 7) |>
   # Sum up totals per plot
-  group_by(plot) |>
+  group_by(plot, plotNickname) |>
     summarise(scaled.canopy.class = round(sum(canopy.scaled, na.rm = TRUE), 3),
               scaled.beetle.class = round(sum(beetle.scaled), 3)) |>
   # Assign classes
@@ -168,7 +206,21 @@ canopy.data.classes = tree.data.all |>
   ) |>
   mutate(plot = round(plot))
 
-write.csv(canopy.data.classes, "outputs/2024.02.14_PlotClasses_BasalAreaScaling.csv")
+# write.csv(canopy.data.classes, "outputs/2024.03.27_PlotClasses_BasalAreaScaling.csv")
+
+table(canopy.data.classes$canopy_category)
+
+hist(canopy.data.classes$scaled.canopy.class, breaks = 20)
+
+# Visualise canopy health as a continuous scale ----
+ggplot(canopy.data.classes |> filter(plot < 40), aes(y = plot, x = scaled.canopy.class, colour = canopy_category)) +
+  geom_point(size = 4) +
+  scale_colour_manual(values = c("dodgerblue3", "gold2", "firebrick3")) +
+  labs(x = "Mean canopy health scaled by basal area", y = "Plot number") +
+  theme_bw() +
+  theme(axis.title = element_text(size = 16))
+
+ggsave("outputs/2024.03.27_canopyClassContinuous.png", width = 8, height = 6, units = "in")
 
 # Compare canopy health with binary beetles ----
 tree.data.canopy = tree.data.all |>
